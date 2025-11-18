@@ -1,4 +1,19 @@
-
+#' NullstrapDE calibration for edgeR
+#'
+#' @param counts Count matrix (optional)
+#' @param colData Sample metadata (optional)
+#' @param dge Pre-built DGEList (optional)
+#' @param design Design matrix (required if dge is provided)
+#' @param fdrcutoff Target FDR level
+#' @param correct Correction method: "none", "ratio", "half"
+#' @param stat Statistic for thresholding: "fc" or "pval"
+#' @param test "lrt" or "qlf"
+#' @param sizeFactors_sample Whether to resample library sizes
+#' @param conservative Use conservative FDP estimation
+#' @param seed Random seed
+#'
+#' @return A data.frame of significant genes from edgeR
+#' @export
 Nullstrap_edgeR <- function(counts = NULL,
                             colData = NULL,
                             dge = NULL,

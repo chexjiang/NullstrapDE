@@ -1,5 +1,17 @@
-
-### Nullstrap-DESeq2
+#' NullstrapDE calibration for DESeq2
+#'
+#' @param dds A DESeqDataSet (optional)
+#' @param counts Count matrix (if dds not supplied)
+#' @param colData Sample metadata (if dds not supplied)
+#' @param fdrcutoff Target FDR level
+#' @param correct Correction mode: "none", "ratio", "half"
+#' @param stat Statistic for thresholding: "fc" or "pval"
+#' @param sizeFactors_sample Whether to resample size factors
+#' @param conservative Conservative mode for FDP estimation
+#' @param seed Random seed
+#'
+#' @return A DESeq2 results table of significant genes
+#' @export
 Nullstrap_DESeq2 <- function(dds = NULL,
                              counts = NULL,
                              colData = NULL,
