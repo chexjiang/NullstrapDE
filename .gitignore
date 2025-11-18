@@ -1,1 +1,11 @@
+.Rhistory
+.RData
 .Rproj.user
+.Rproj.user/
+.Rproj.user/*
+.Rproj.user/shared/notebooks
+*/.Rproj.user
+.DS_Store
+.Rbuildignore
+.Ruserdata
+
