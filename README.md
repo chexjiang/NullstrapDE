@@ -15,10 +15,11 @@ The core of Nullstrap-DE consists of three main components:
 
 This package provides two wrapper functions:
 
--   `Nullstrap_DESeq2()` -- Nullstrap calibration for DESeq2\
--   `Nullstrap_edgeR()` -- Nullstrap calibration for edgeR
+-   `Nullstrap_DESeq2()` -- NullstrapDE calibration for DESeq2
 
-Both are designed as drop-in extensions to standard workflows.
+-   `Nullstrap_edgeR()` -- NullstrapDE calibration for edgeR
+
+Both are designed as add-on extensions to standard workflows.
 
 ------------------------------------------------------------------------
 
