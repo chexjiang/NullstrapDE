@@ -10,7 +10,7 @@ The core of Nullstrap-DE consists of three main components:
 2.  **Computation of test statistics**\
     Test statistics are computed on both the original data and synthetic-null data.
 
-3.  **FDR calibration via binary search**\
+3.  **FDR calibration**\
     Test statistics from synthetic-null datasets are used to calibrate a significance threshold for the original data.
 
 This package provides two wrapper functions:
@@ -41,9 +41,9 @@ Below are minimal examples demonstrating how to use Nullstrap-DESeq2 and Nullstr
 
 ``` r
 data("example_data", package = "NullstrapDE")
-counts <- example_data$counts   # the gene count matrix
-colData <- example_data$colData  # the condition label for each sample
-true_de <- example_data$true_de  # the true DE index
+counts   <- example_data$counts     # gene count matrix
+colData  <- example_data$colData    # condition labels
+true_de  <- example_data$true_de    # true DE indicator (logical)
 fdrcutoff <- 0.1
 ```
 
