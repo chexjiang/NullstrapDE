@@ -1,0 +1,469 @@
+---
+title: "20251130_covid_analysis"
+author: "Chenxin Jiang"
+date: "2025-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+library(DESeq2)
+library(edgeR)
+library(NullstrapDE)
+library(ggplot2)
+library(gplots)
+library(dplyr)
+library(cowplot)
+library(patchwork)
+library(RColorBrewer)
+library(ggplotify)
+library(gridExtra)
+library(ggrastr)
+```
+
+
+## Data exploration
+
+```{r}
+pb_counts <- read.table("GSE158055/pb_counts.txt") 
+colnames(pb_counts) <- gsub("\\.", "-", colnames(pb_counts))
+
+pb_meta <- read.table("GSE158055/pb_meta.txt") 
+rownames(pb_meta) <- pb_meta$Patients
+colData <- pb_meta %>%
+  dplyr::select(
+    patient  = Patients,
+    sex      = `characteristics..Sex`,
+    severity = `characteristics..CoVID.19.severity`,
+    batch    = `characteristics...Datasets`
+  ) %>%
+  filter(batch != "Batch17")
+
+# keep only columns in pb_counts that match rownames(colData)
+pb_counts <- pb_counts[, colnames(pb_counts) %in% rownames(colData)]
+pb_counts <- pb_counts[, rownames(colData)]
+
+# Filter out MT genes
+pb_counts <- pb_counts[!grepl("^MT", rownames(pb_counts)), ]
+
+fdrcutoff <- 0.1
+```
+
+### Visualize the data
+
+```{r}
+# Set up dds object
+dds <- suppressMessages(
+  DESeqDataSetFromMatrix(countData = pb_counts, 
+                         colData = colData, 
+                         design = ~ severity)
+)
+vsd <- vst(dds)
+pcaData <- plotPCA(vsd, intgroup = "severity", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+p_pca <- ggplot(pcaData, aes(x = PC1, y = PC2, color = severity)) +
+  geom_point(size = 3) +
+  labs(x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance"),
+       title = "PCA of COVID samples") +
+  coord_fixed() +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank()
+  )
+p_pca
+```
+
+
+## DE analysis
+
+```{r warning = FALSE}
+set.seed(1)
+## DESeq2
+dds <- suppressMessages(
+  DESeqDataSetFromMatrix(countData = pb_counts, 
+                         colData = colData, 
+                         design = ~ severity)
+)
+dds <- DESeq(dds, quiet = TRUE)
+res_deseq2_original <- results(dds)
+# res_deseq2_original <-results(dds, independentFiltering = FALSE)
+res_deseq2_original <- na.omit(res_deseq2_original)
+res_deseq2 <- res_deseq2_original[res_deseq2_original$padj<fdrcutoff,]
+res_deseq2 <- res_deseq2[order(abs(res_deseq2$log2FoldChange), 
+                               decreasing = TRUE), ] 
+
+## DESeq2-Nullstrap
+res_deseq2_nullstrap <- Nullstrap_DESeq2(dds, 
+                                   fdrcutoff = fdrcutoff, 
+                                   stat = "fc", 
+                                   correct = "ratio", 
+                                   sizeFactors_sample = F)
+res_deseq2_nullstrap[order(abs(res_deseq2_nullstrap$log2FoldChange), decreasing = TRUE), ]
+res_deseq2_nullstrap <- as.data.frame(res_deseq2_nullstrap)
+
+## edgeR
+condition <- colData$severity
+design <- model.matrix(~ condition)
+dge <- DGEList(counts = pb_counts, group = condition)
+keep <- filterByExpr(dge, design = design)
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+# fit <- glmQLFit(dge, design)
+# res_fit <- glmQLFTest(fit)
+fit <- glmFit(dge, design)
+res_fit <- glmLRT(fit)
+res_edger_original <- topTags(res_fit, n = Inf)$table
+res_edger <- res_edger_original[res_edger_original$FDR < fdrcutoff, ]
+res_edger <- res_edger[order(abs(res_edger$logFC),
+                             decreasing = TRUE), ]
+
+## edgeR-nullstrap
+res_edger_nullstrap <- Nullstrap_edgeR(dge = dge,
+                               design = design,
+                               correct = "ratio",
+                               stat = "fc",
+                               test = "qlf",
+                               fdrcutoff = fdrcutoff,
+                               sizeFactors_sample = F)
+res_edger_nullstrap <- res_edger_nullstrap[order(abs(res_edger_nullstrap$logFC), 
+                                         decreasing = TRUE), ]
+
+```
+
+
+
+### Visualize the DE results
+
+```{r}
+### Venn diagrams
+library(VennDiagram)
+library(scales) 
+
+genes_deseq2   <- rownames(res_deseq2)
+genes_deseq2_nullstrap  <- rownames(res_deseq2_nullstrap)
+genes_edger    <- rownames(res_edger)
+genes_edger_nullstrap  <- rownames(res_edger_nullstrap)
+genes_deseq2_diff <- setdiff(genes_deseq2, genes_deseq2_nullstrap)
+genes_edger_diff <- setdiff(genes_edger, genes_edger_nullstrap)
+
+genes_deseq2_ordered <- as.data.frame(res_deseq2) %>% 
+  mutate(gene_id = rownames(res_deseq2)) %>% 
+  arrange(padj) %>% pull(gene_id)
+
+genes_edger_ordered <- as.data.frame(res_edger) %>% 
+  mutate(gene_id = rownames(res_edger)) %>% 
+  arrange(FDR) %>% pull(gene_id)
+
+
+res_deseq2_diff <- res_deseq2[genes_deseq2_diff, , drop = FALSE]
+res_edger_diff <- res_edger[genes_edger_diff, , drop = FALSE]
+
+# Gene sets for each method
+venn_list <- list(
+  DESeq2 = genes_deseq2,
+  edgeR = genes_edger,
+  Nullstrap_DESeq2 = genes_deseq2_nullstrap,
+  Nullstrap_edgeR = genes_edger_nullstrap
+)
+# Rename list elements with method name + size
+method_sizes <- vapply(venn_list, length, FUN.VALUE = numeric(1))
+names(venn_list) <- paste0(names(venn_list), "\n(", method_sizes, ")")
+method_sizes
+
+pdf("plot/plot_venn.pdf", width = 2, height = 2)  
+venn.plot <- venn.diagram(
+  x = venn_list,
+  filename = NULL,  # Plot only, no file
+  lwd = 1,
+  col = c("#FA6F6B", '#7fbf7b', '#998ec3', '#91bfdb'),
+  fill = alpha(c("#FA6F6B", '#7fbf7b', '#998ec3', '#91bfdb'), 0.5),
+  cex = 0.4,
+  fontfamily = "sans",
+  cat.cex = 0.4,
+  cat.fontfamily = "sans",
+  cat.col = c("#FA6F6B", '#7fbf7b', '#998ec3', '#91bfdb')
+)
+
+grid.newpage()
+grid.draw(venn.plot)
+dev.off()
+unlink(list.files(pattern = "^VennDiagram\\..*\\.log$"))
+```
+
+
+
+
+
+
+```{r}
+### MA plot 
+library(ggrepel)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+topN <- 20
+## DESeq2
+# Step 1: Create df_all and mark category
+df_all <- as.data.frame(res_deseq2_original)
+df_all$category <- ifelse(
+  rownames(df_all) %in% genes_deseq2_diff, "DESeq2 only",
+  ifelse(rownames(df_all) %in% genes_deseq2_nullstrap, "Nullstrap-DESeq2", "Not DE")
+)
+
+# Step 2: Extract top 10 DESeq2-nullstrap genes by abs(log2FoldChange)
+top_deseq2_nullstrap <- df_all[rownames(df_all) %in% genes_deseq2_nullstrap, ] %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  head(topN)
+top_deseq2_nullstrap$gene_id <- rownames(top_deseq2_nullstrap)
+top_deseq2_nullstrap$gene_symbol <- sub("\\..*", "", top_deseq2_nullstrap$gene_id)
+
+# Step 4: Plot
+p_ma_deseq2 <- ggplot(df_all, aes(x = log10(baseMean + 1), y = log2FoldChange, color = category)) +
+  ggrastr::geom_point_rast(size = 0.2, alpha = 0.6) +
+  geom_text_repel(
+    data = top_deseq2_nullstrap,
+    aes(label = gene_symbol),
+    size = 1.75, color = "black", max.overlaps = Inf, na.rm = TRUE
+  ) +
+  scale_color_manual(
+    values = c(
+      "DESeq2 only" = "#FA6F6B",
+      "Nullstrap-DESeq2" = "#998ec3",
+      "Not DE" = "grey80"
+    )
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40", linewidth = 0.3) +
+  labs(color = NULL, y = "logFC") + 
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.2)
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1))) 
+
+
+
+## edgeR
+# Step 1: Create df_all2 and mark category
+df_all2 <- as.data.frame(res_edger_original)
+df_all2$category <- ifelse(rownames(df_all2) %in% genes_edger_diff, "edgeR only",
+                           ifelse(rownames(df_all2) %in% genes_edger_nullstrap, "Nullstrap-edgeR", "Not DE"))
+# Step 2: Extract top 10 DESeq2-nullstrap genes by abs(logFC)
+top_edger_nullstrap <- df_all2[rownames(df_all2) %in% genes_edger_nullstrap, ] %>%
+  arrange(desc(abs(logFC))) %>% head(topN)
+top_edger_nullstrap$gene_id <- rownames(top_edger_nullstrap)
+top_edger_nullstrap$gene_symbol <- sub("\\..*", "", top_edger_nullstrap$gene_id)
+
+# Step 4: Plot
+p_ma_edger <- ggplot(df_all2, aes(x = logCPM, y = logFC, color = category)) +
+  ggrastr::geom_point_rast(size = 0.2, alpha = 0.6) +
+  geom_text_repel(
+    data = top_edger_nullstrap,
+    aes(label = gene_symbol),
+    size = 1.75, color = "black", max.overlaps = Inf, na.rm = TRUE
+  ) +
+  scale_color_manual(
+    values = c(
+      "edgeR only" = "#7fbf7b",
+      "Nullstrap-edgeR" = "#91bfdb",
+      "Not DE" = "grey80"
+    )
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40", linewidth = 0.3) +
+  labs(color = NULL) + 
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.2)
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1))) 
+```
+
+```{r}
+plot_ma <- plot_grid(
+  p_ma_deseq2 + ggtitle("Nullstrap-DESeq2 and DESeq2") +
+  theme(
+    plot.title    = element_text(size = 6),
+    axis.text     = element_text(size = 5),
+    axis.title    = element_text(size = 5),
+    legend.text   = element_text(size = 6)
+  ),
+  p_ma_edger + ggtitle("Nullstrap-edgeR and edgeR") +
+  theme(
+    plot.title    = element_text(size = 6),
+    axis.text     = element_text(size = 5),
+    axis.title    = element_text(size = 5),
+    legend.text   = element_text(size = 6)
+  ),
+  labels = c("b", ""), label_size = 8,
+  ncol  = 2
+)
+
+plot_ma
+```
+
+```{r}
+ggsave2(paste0("plot/plot_ma.pdf"),
+        device = "pdf", plot = plot_ma, width = 4.4, height = 2.5, units = "in", dpi = 500)
+```
+
+
+
+
+## Gene functional analysis
+
+```{r warning=FALSE}
+### GO
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(dplyr)
+library(enrichplot)
+library(cowplot)
+library(patchwork)
+
+
+# Define all gene sets in a named list
+gene_sets <- list(
+  nullstrap_DESeq2  = genes_deseq2_nullstrap,
+  DESeq2        = genes_deseq2,
+  DESeq2_diff   = genes_deseq2_diff,
+  nullstrap_edgeR   = genes_edger_nullstrap,
+  edgeR         = genes_edger,
+  edgeR_diff    = genes_edger_diff
+)
+names(gene_sets)[names(gene_sets) == "nullstrap_DESeq2"] <- "Nullstrap-DESeq2"
+names(gene_sets)[names(gene_sets) == "nullstrap_edgeR"] <- "Nullstrap-edgeR"
+
+compute_GO <- function(genes, ont = "BP"){
+  genes_clean <- sub("\\..*", "", genes)
+  entrez <- mapIds(org.Hs.eg.db, keys = genes_clean,
+                   column = "ENTREZID", keytype = "SYMBOL", multiVals = "first") %>% na.omit()
+  enrichGO(gene = entrez,
+           OrgDb = org.Hs.eg.db,
+           ont = ont,
+           pAdjustMethod = "BH",
+           pvalueCutoff = 0.05,
+           readable = TRUE)
+}
+
+# Map to Entrez IDs and run enrichGO
+go_results <- lapply(gene_sets, function(genes) {
+  compute_GO(genes, ont = "BP")
+})
+
+
+# Generate dotplots
+go_plots <- Map(function(go, title) {
+  df <- enrichplot::dotplot(go, showCategory = 8, label_format = 30)$data
+  min_count <- min(df$Count, na.rm = TRUE)
+  max_count <- max(df$Count, na.rm = TRUE)
+  
+  p <- enrichplot::dotplot(go, showCategory = 8, label_format=30) +
+    ggtitle(title) +
+    scale_size_continuous(
+      limits = c(min_count, max_count),
+      range = c(2, 5)
+    ) +
+  scale_color_gradientn(
+    colors = c("#fb9a99", "#bcbddc", "#a6cee3"),  # 奶红 → 淡紫 → 奶蓝
+    name = "Adjusted p",
+    labels = scales::label_scientific(digits = 2),
+    guide = guide_colorbar(barwidth = 0.5, barheight = 3)
+  ) +
+    theme(
+      plot.title = element_text(size = 6),
+      axis.title = element_text(size = 5),
+      axis.text.x = element_text(size = 5),
+      axis.text.y = element_text(size = 5),
+      legend.title = element_text(size = 5),
+      legend.text = element_text(size = 5),
+      legend.key.width = unit(4, "pt"),
+      legend.key.height = unit(4, "pt"),
+    )
+  
+  p <- p + geom_point(shape = 21, colour = "black", stroke = 0.3)
+  p
+}, go_results, names(go_results))
+
+
+```
+
+
+```{r}
+wrap_plots(go_plots[1:3], ncol = 3) + 
+  plot_annotation(title = "GO Enrichment: DESeq2 Methods")
+
+wrap_plots(go_plots[4:6], ncol = 3) + 
+  plot_annotation(title = "GO Enrichment: edgeR Methods")
+
+```
+
+
+
+```{r}
+plot_go_edger <- plot_grid(
+  plotlist = go_plots[4:6],
+  ncol = 3,
+  labels = "b", label_size = 8,
+  align = 'hv'
+)
+
+plot_go_deseq2 <- plot_grid(
+  plotlist = go_plots[1:3],
+  ncol = 3,
+  labels = "c", label_size = 8,
+  align = 'hv'
+)
+
+```
+
+```{r}
+ggsave2(paste0("plot/plot_go_edger.pdf"),
+        device = "pdf", plot = plot_go_edger, width = 7, height = 2, units = "in", dpi = 500)
+ggsave2(paste0("plot/plot_go_deseq2.pdf"),
+        device = "pdf", plot = plot_go_deseq2, width = 7, height = 2, units = "in", dpi = 500)
+```
+
+
+
+```{r}
+# Cnet plot
+go1 <- go_results$`Nullstrap-DESeq2`
+go1_sim <- enrichplot::pairwise_termsim(go1)
+go1_symbol <- setReadable(go1_sim, OrgDb = org.Hs.eg.db, keyType = "ENTREZID")
+fc_vector1 <- res_deseq2_nullstrap$log2FoldChange
+names(fc_vector1) <- rownames(res_deseq2_nullstrap)
+p_cnet1 <- cnetplot(go1_symbol,
+         showCategory = 10,
+         foldChange = fc_vector1,
+         node_label = "all",
+         circular = FALSE,
+         layout = "kk") + ggtitle("Nullstrap-DESeq2")
+
+# DESeq2
+go2 <- go_results$DESeq2
+go2_sim <- enrichplot::pairwise_termsim(go2)
+go2_symbol <- setReadable(go2_sim, OrgDb = org.Hs.eg.db, keyType = "ENTREZID")
+fc_vector2 <- res_deseq2$log2FoldChange
+names(fc_vector2) <- rownames(res_deseq2)
+p_cnet2 <- cnetplot(go2_symbol,
+         showCategory = 10,
+         foldChange = fc_vector2,
+         node_label = "all",
+         circular = FALSE,
+         layout = "kk") + ggtitle("DESeq2")
+
+```
+
