@@ -124,3 +124,7 @@ The following code is a quick example of how to implement the **Nullstrap-DESeq2
 ## Related Manuscript
 
 [Jiang, C., Wang, C., Li, J. J. (2025). Nullstrap-DE: A General Framework for Calibrating FDR and Preserving Power in DE Methods, with Applications to DESeq2 and edgeR. *arXiv*, 2025-07.](https://arxiv.org/abs/2507.20598)
+
+## License
+
+NullstrapDE is released under the [MIT License](LICENSE).
